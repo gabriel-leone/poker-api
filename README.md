@@ -27,7 +27,8 @@ Content-Type: application/json
 Resposta:
 ```json
 {
-    "room_id": "abc12345"
+    "room_id": "abc12345",
+    "player_id": "uuid-do-criador"
 }
 ```
 
@@ -38,6 +39,24 @@ Content-Type: application/json
 
 {
     "player_name": "Nome do Jogador"
+}
+```
+
+Resposta de sucesso:
+```json
+{
+    "success": true,
+    "message": "Entrou na sala com sucesso",
+    "player_id": "uuid-do-jogador"
+}
+```
+
+Resposta de erro:
+```json
+{
+    "success": false,
+    "message": "Sala lotada",
+    "player_id": null
 }
 ```
 
@@ -173,7 +192,7 @@ const response = await fetch('/room', {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ creator_name: 'João', max_players: 4 })
 });
-const { room_id } = await response.json();
+const { room_id, player_id } = await response.json();
 
 // Conectar WebSocket
 const ws = new WebSocket(`ws://localhost:3000/room/${room_id}/ws`);
@@ -182,7 +201,7 @@ ws.onopen = () => {
     // Entrar na sala
     ws.send(JSON.stringify({
         message_type: 'join',
-        data: { player_id: 'seu-player-id' }
+        data: { player_id: player_id }
     }));
 };
 
@@ -196,7 +215,7 @@ function makeAction(action) {
     ws.send(JSON.stringify({
         message_type: 'game_action',
         data: {
-            player_id: 'seu-player-id',
+            player_id: player_id,
             action: action
         }
     }));

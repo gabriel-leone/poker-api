@@ -99,6 +99,7 @@ pub struct CreateRoomRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRoomResponse {
     pub room_id: String,
+    pub player_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,6 +111,7 @@ pub struct JoinRoomRequest {
 pub struct JoinRoomResponse {
     pub success: bool,
     pub message: String,
+    pub player_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

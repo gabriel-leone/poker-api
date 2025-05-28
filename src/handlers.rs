@@ -26,20 +26,19 @@ pub async fn create_room(
     };
 
     let mut players = HashMap::new();
-    players.insert(player_id.clone(), creator);
-
-    let room = Room {
+    players.insert(player_id.clone(), creator);    let room = Room {
         id: room_id.clone(),
-        creator_id: player_id,
+        creator_id: player_id.clone(),
         players,
         game: None,
         max_players: request.max_players.unwrap_or(6),
         websocket_senders: HashMap::new(),
-    };
+    };state.rooms.insert(room_id.clone(), room);
 
-    state.rooms.insert(room_id.clone(), room);
-
-    Ok(Json(CreateRoomResponse { room_id }))
+    Ok(Json(CreateRoomResponse { 
+        room_id,
+        player_id 
+    }))
 }
 
 pub async fn join_room(
@@ -47,12 +46,11 @@ pub async fn join_room(
     State(state): State<AppState>,
     Json(request): Json<JoinRoomRequest>,
 ) -> Result<Json<JoinRoomResponse>, StatusCode> {
-    let mut room = state.rooms.get_mut(&room_id).ok_or(StatusCode::NOT_FOUND)?;
-
-    if room.players.len() >= room.max_players {
+    let mut room = state.rooms.get_mut(&room_id).ok_or(StatusCode::NOT_FOUND)?;    if room.players.len() >= room.max_players {
         return Ok(Json(JoinRoomResponse {
             success: false,
             message: "Sala lotada".to_string(),
+            player_id: None,
         }));
     }
 
@@ -60,6 +58,7 @@ pub async fn join_room(
         return Ok(Json(JoinRoomResponse {
             success: false,
             message: "Jogo já iniciado".to_string(),
+            player_id: None,
         }));
     }
 
@@ -72,9 +71,7 @@ pub async fn join_room(
         current_bet: 0,
         is_folded: false,
         is_all_in: false,
-    };
-
-    room.players.insert(player_id, player);
+    };    room.players.insert(player_id.clone(), player);
 
     // Notificar outros jogadores via WebSocket
     let message = serde_json::json!({
@@ -91,6 +88,7 @@ pub async fn join_room(
     Ok(Json(JoinRoomResponse {
         success: true,
         message: "Entrou na sala com sucesso".to_string(),
+        player_id: Some(player_id),
     }))
 }
 
