@@ -44,7 +44,7 @@ pub struct Player {
     pub is_all_in: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GameState {
     Waiting,
     PreFlop,
