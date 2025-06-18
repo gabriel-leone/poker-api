@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Suit {
     Hearts,
     Diamonds,
@@ -124,4 +124,48 @@ pub struct WebSocketMessage {
 pub struct GameActionMessage {
     pub player_id: String,
     pub action: PlayerAction,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HandRank {
+    HighCard = 1,
+    OnePair = 2,
+    TwoPair = 3,
+    ThreeOfAKind = 4,
+    Straight = 5,
+    Flush = 6,
+    FullHouse = 7,
+    FourOfAKind = 8,
+    StraightFlush = 9,
+    RoyalFlush = 10,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandEvaluation {
+    pub rank: HandRank,
+    pub kickers: Vec<u8>, // Cartas que desempatam
+    pub cards: Vec<Card>, // As 5 melhores cartas
+}
+
+impl PartialEq for HandEvaluation {
+    fn eq(&self, other: &Self) -> bool {
+        self.rank == other.rank && self.kickers == other.kickers
+    }
+}
+
+impl Eq for HandEvaluation {}
+
+impl PartialOrd for HandEvaluation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HandEvaluation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.rank.cmp(&other.rank) {
+            std::cmp::Ordering::Equal => self.kickers.cmp(&other.kickers),
+            other => other,
+        }
+    }
 }

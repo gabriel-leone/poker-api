@@ -109,10 +109,9 @@ async fn handle_game_action(
         // Primeiro, coletar todos os senders
         let senders: Vec<_> = room.websocket_senders.values().cloned().collect();
         let player_sender = room.websocket_senders.get(player_id).cloned();
-        
-        if let Some(ref mut game) = room.game {
+          if let Some(ref mut game) = room.game {
             match game.process_action(player_id, action) {
-                Ok(()) => {
+                Ok(round_result) => {
                     // Enviar estado atualizado do jogo para todos os jogadores
                     let game_state = game.get_game_state();
                     let message = serde_json::json!({
@@ -124,17 +123,11 @@ async fn handle_game_action(
                         let _ = sender.send(message.to_string());
                     }
 
-                    // Se o jogo terminou, iniciar uma nova rodada após um delay
-                    let is_game_finished = matches!(game.state, GameState::Finished);
-                    let pot = game.pot;
-                    
-                    if is_game_finished {
+                    // Se há um resultado da rodada (jogo terminou), enviar o resultado
+                    if let Some(result) = round_result {
                         let message = serde_json::json!({
                             "type": "round_finished",
-                            "data": {
-                                "winner": "TBD", // Implementar lógica de vencedor
-                                "pot": pot
-                            }
+                            "data": result
                         });
 
                         for sender in &senders {

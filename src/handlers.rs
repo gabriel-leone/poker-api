@@ -134,3 +134,59 @@ pub async fn start_game(
         "game_state": game_state
     })))
 }
+
+pub async fn get_hand_result(
+    Path(room_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let room = state.rooms.get(&room_id).ok_or(StatusCode::NOT_FOUND)?;
+    
+    let game = room.game.as_ref().ok_or(StatusCode::BAD_REQUEST)?;
+    
+    if let Some(result) = game.get_hand_result() {
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "result": result
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Jogo ainda não terminou"
+        })))
+    }
+}
+
+pub async fn next_hand(
+    Path(room_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut room = state.rooms.get_mut(&room_id).ok_or(StatusCode::NOT_FOUND)?;
+    
+    let game = room.game.as_mut().ok_or(StatusCode::BAD_REQUEST)?;
+    
+    if !matches!(game.state, GameState::Finished) {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Mão atual ainda não terminou"
+        })));
+    }
+
+    game.next_hand();
+    let game_state = game.get_game_state();
+
+    // Notificar todos os jogadores via WebSocket
+    let message = serde_json::json!({
+        "type": "new_hand_started",
+        "data": game_state
+    });
+
+    for sender in room.websocket_senders.values() {
+        let _ = sender.send(message.to_string());
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Nova mão iniciada",
+        "game_state": game_state
+    })))
+}

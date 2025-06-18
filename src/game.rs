@@ -49,6 +49,11 @@ impl Game {
             player.is_all_in = false;
         }
 
+        // Recriar e embaralhar o deck
+        self.deck = Self::create_deck();
+        let mut rng = thread_rng();
+        self.deck.shuffle(&mut rng);
+
         self.community_cards.clear();
         self.pot = 0;
         self.current_bet = 0;
@@ -110,8 +115,7 @@ impl Game {
         self.players[big_blind_index].current_bet = big_blind_amount;
         self.pot += big_blind_amount;
         self.current_bet = big_blind_amount;
-        self.round_bets.insert(self.players[big_blind_index].id.clone(), big_blind_amount);
-    }    pub fn process_action(&mut self, player_id: &str, action: PlayerAction) -> Result<(), String> {
+        self.round_bets.insert(self.players[big_blind_index].id.clone(), big_blind_amount);    }    pub fn process_action(&mut self, player_id: &str, action: PlayerAction) -> Result<Option<serde_json::Value>, String> {
         let current_player = &self.players[self.current_player_index];
         
         if current_player.id != player_id {
@@ -182,10 +186,10 @@ impl Game {
             }        }
 
         self.next_player();
-        self.check_round_completion();
+        let round_result = self.check_round_completion();
 
-        Ok(())
-    }    fn next_player(&mut self) {
+        Ok(round_result)
+    }fn next_player(&mut self) {
         let starting_index = self.current_player_index;
         
         loop {
@@ -203,7 +207,7 @@ impl Game {
                 break;
             }
         }
-    }fn check_round_completion(&mut self) {
+    }    fn check_round_completion(&mut self) -> Option<serde_json::Value> {
         let active_players: Vec<_> = self.players.iter()
             .enumerate()
             .filter(|(_, p)| !p.is_folded && !p.is_all_in)
@@ -211,8 +215,7 @@ impl Game {
 
         // Se há apenas um jogador ativo ou menos, a rodada termina
         if active_players.len() <= 1 {
-            self.advance_game_state();
-            return;
+            return self.advance_game_state();
         }
 
         // Verificar se todos os jogadores ativos fizeram a mesma aposta
@@ -225,9 +228,11 @@ impl Game {
         let all_players_had_turn = self.has_betting_round_completed(&active_players);
 
         if all_bets_equal && all_players_had_turn {
-            self.advance_game_state();
+            return self.advance_game_state();
         }
-    }    fn has_betting_round_completed(&self, active_players: &[(usize, &Player)]) -> bool {
+
+        None
+    }fn has_betting_round_completed(&self, active_players: &[(usize, &Player)]) -> bool {
         // Se não há aposta atual, verificar se todos os jogadores ativos tiveram sua vez
         if self.current_bet == 0 {
             // Para que a rodada termine sem apostas, todos devem ter pelo menos uma entrada em round_bets
@@ -243,7 +248,7 @@ impl Game {
             player.current_bet == self.current_bet || 
             self.round_bets.contains_key(&player.id)
         })
-    }    fn advance_game_state(&mut self) {
+    }    fn advance_game_state(&mut self) -> Option<serde_json::Value> {
         // Reset current bets for next round
         for player in &mut self.players {
             player.current_bet = 0;
@@ -266,14 +271,14 @@ impl Game {
             }
             GameState::River => {
                 self.state = GameState::Showdown;
-                self.determine_winner();
-                return; // Não redefinir current_player_index para showdown
+                return self.determine_winner(); // Retornar o resultado
             }
             _ => {}
         }
 
         // Reset current player para o primeiro jogador ativo à esquerda do dealer
         self.current_player_index = self.get_first_active_player_after_dealer();
+        None
     }
 
     fn get_first_active_player_after_dealer(&self) -> usize {
@@ -318,25 +323,275 @@ impl Game {
         if let Some(card) = self.deck.pop() {
             self.community_cards.push(card);
         }
-    }
-
-    fn determine_winner(&mut self) {
-        // Implementação simplificada - o jogador que não foldou ganha
+    }    fn determine_winner(&mut self) -> Option<serde_json::Value> {
         let active_players: Vec<_> = self.players.iter()
             .enumerate()
             .filter(|(_, p)| !p.is_folded)
             .collect();
 
+        let pot_amount = self.pot; // Capturar o valor do pot antes de limpar        // Se só há um jogador ativo, ele ganha
         if active_players.len() == 1 {
             let (winner_index, _) = active_players[0];
+            let winner_id = self.players[winner_index].id.clone();
+            let winner_name = self.players[winner_index].name.clone();
+            let winner_hand = self.players[winner_index].hand.clone();
+            
             self.players[winner_index].chips += self.pot;
+            let result = serde_json::json!({
+                "type": "single_winner",
+                "winner": {
+                    "id": winner_id,
+                    "name": winner_name,
+                    "hand": winner_hand
+                },
+                "pot_won": pot_amount
+            });
             self.pot = 0;
+            self.state = GameState::Finished;
+            return Some(result);
         }
 
+        // Avaliar todas as mãos dos jogadores ativos
+        let mut evaluations: Vec<(usize, HandEvaluation)> = Vec::new();
+        
+        for (index, player) in &active_players {
+            let mut all_cards = player.hand.clone();
+            all_cards.extend(self.community_cards.clone());
+            let evaluation = self.evaluate_hand(all_cards);
+            evaluations.push((*index, evaluation));
+        }
+
+        // Ordenar por força da mão (melhor mão primeiro)
+        evaluations.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Determinar vencedores (pode haver empate)
+        let best_hand = &evaluations[0].1;
+        let mut winners = Vec::new();
+        
+        for (index, eval) in &evaluations {
+            if eval == best_hand {
+                winners.push(*index);
+            } else {
+                break;
+            }
+        }
+
+        // Distribuir o pot entre os vencedores
+        let pot_per_winner = self.pot / winners.len() as u32;
+        let remainder = self.pot % winners.len() as u32;
+
+        for (i, &winner_index) in winners.iter().enumerate() {
+            let mut winnings = pot_per_winner;
+            if i < remainder as usize {
+                winnings += 1; // Distribuir o resto
+            }
+            self.players[winner_index].chips += winnings;
+        }
+
+        // Criar resultado detalhado
+        let result = serde_json::json!({
+            "type": "showdown",
+            "pot_won": pot_amount,
+            "winners": winners.iter().map(|&index| {
+                let player = &self.players[index];
+                let eval = evaluations.iter().find(|(i, _)| *i == index).unwrap().1.clone();
+                serde_json::json!({
+                    "id": player.id,
+                    "name": player.name,
+                    "hand": player.hand,
+                    "best_hand": eval.cards,
+                    "hand_rank": eval.rank
+                })
+            }).collect::<Vec<_>>(),
+            "all_hands": evaluations.iter().map(|(index, eval)| {
+                let player = &self.players[*index];
+                serde_json::json!({
+                    "id": player.id,
+                    "name": player.name,
+                    "hand": player.hand,
+                    "best_hand": eval.cards,
+                    "hand_rank": eval.rank
+                })
+            }).collect::<Vec<_>>()
+        });
+
+        self.pot = 0;
         self.state = GameState::Finished;
+        Some(result)
     }
 
-    pub fn get_game_state(&self) -> serde_json::Value {
+    fn evaluate_hand(&self, cards: Vec<Card>) -> HandEvaluation {
+        // Obter todas as combinações de 5 cartas das 7 disponíveis
+        let combinations = self.get_five_card_combinations(cards);
+        
+        // Avaliar cada combinação e retornar a melhor
+        let mut best_evaluation = self.evaluate_five_cards(&combinations[0]);
+        
+        for combination in combinations.iter().skip(1) {
+            let evaluation = self.evaluate_five_cards(combination);
+            if evaluation > best_evaluation {
+                best_evaluation = evaluation;
+            }
+        }
+        
+        best_evaluation
+    }
+
+    fn get_five_card_combinations(&self, cards: Vec<Card>) -> Vec<Vec<Card>> {
+        let mut combinations = Vec::new();
+        let n = cards.len();
+        
+        // Gerar todas as combinações de 5 cartas
+        for i in 0..n {
+            for j in (i+1)..n {
+                for k in (j+1)..n {
+                    for l in (k+1)..n {
+                        for m in (l+1)..n {
+                            combinations.push(vec![
+                                cards[i].clone(),
+                                cards[j].clone(),
+                                cards[k].clone(),
+                                cards[l].clone(),
+                                cards[m].clone(),
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+        
+        combinations
+    }
+
+    fn evaluate_five_cards(&self, cards: &[Card]) -> HandEvaluation {
+        let mut sorted_cards = cards.to_vec();
+        sorted_cards.sort_by(|a, b| (b.rank as u8).cmp(&(a.rank as u8)));
+        
+        let ranks: Vec<u8> = sorted_cards.iter().map(|c| c.rank as u8).collect();
+        let suits: Vec<Suit> = sorted_cards.iter().map(|c| c.suit).collect();
+        
+        let is_flush = suits.iter().all(|&s| s == suits[0]);
+        let is_straight = self.is_straight(&ranks);
+        
+        // Royal Flush
+        if is_flush && is_straight && ranks[0] == 14 {
+            return HandEvaluation {
+                rank: HandRank::RoyalFlush,
+                kickers: vec![14],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Straight Flush
+        if is_flush && is_straight {
+            return HandEvaluation {
+                rank: HandRank::StraightFlush,
+                kickers: vec![ranks[0]],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Contar frequências dos ranks
+        let mut rank_counts: std::collections::HashMap<u8, u8> = std::collections::HashMap::new();
+        for &rank in &ranks {
+            *rank_counts.entry(rank).or_insert(0) += 1;
+        }
+        
+        let mut counts: Vec<(u8, u8)> = rank_counts.into_iter().collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+        
+        // Four of a Kind
+        if counts[0].1 == 4 {
+            return HandEvaluation {
+                rank: HandRank::FourOfAKind,
+                kickers: vec![counts[0].0, counts[1].0],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Full House
+        if counts[0].1 == 3 && counts[1].1 == 2 {
+            return HandEvaluation {
+                rank: HandRank::FullHouse,
+                kickers: vec![counts[0].0, counts[1].0],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Flush
+        if is_flush {
+            return HandEvaluation {
+                rank: HandRank::Flush,
+                kickers: ranks,
+                cards: sorted_cards,
+            };
+        }
+        
+        // Straight
+        if is_straight {
+            return HandEvaluation {
+                rank: HandRank::Straight,
+                kickers: vec![ranks[0]],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Three of a Kind
+        if counts[0].1 == 3 {
+            return HandEvaluation {
+                rank: HandRank::ThreeOfAKind,
+                kickers: vec![counts[0].0, counts[1].0, counts[2].0],
+                cards: sorted_cards,
+            };
+        }
+        
+        // Two Pair
+        if counts[0].1 == 2 && counts[1].1 == 2 {
+            return HandEvaluation {
+                rank: HandRank::TwoPair,
+                kickers: vec![counts[0].0, counts[1].0, counts[2].0],
+                cards: sorted_cards,
+            };
+        }
+        
+        // One Pair
+        if counts[0].1 == 2 {
+            return HandEvaluation {
+                rank: HandRank::OnePair,
+                kickers: vec![counts[0].0, counts[1].0, counts[2].0, counts[3].0],
+                cards: sorted_cards,
+            };
+        }
+        
+        // High Card
+        HandEvaluation {
+            rank: HandRank::HighCard,
+            kickers: ranks,
+            cards: sorted_cards,
+        }
+    }
+
+    fn is_straight(&self, ranks: &[u8]) -> bool {
+        // Verificar sequência normal
+        let mut consecutive = true;
+        for i in 1..ranks.len() {
+            if ranks[i-1] - ranks[i] != 1 {
+                consecutive = false;
+                break;
+            }
+        }
+        
+        if consecutive {
+            return true;
+        }
+        
+        // Verificar A-2-3-4-5 (wheel)
+        if ranks == [14, 5, 4, 3, 2] {
+            return true;
+        }
+        
+        false
+    }    pub fn get_game_state(&self) -> serde_json::Value {
         serde_json::json!({
             "game_id": self.id,
             "state": self.state,
@@ -355,13 +610,90 @@ impl Game {
                 "current_bet": p.current_bet,
                 "is_folded": p.is_folded,
                 "is_all_in": p.is_all_in,
-                "hand": if matches!(self.state, GameState::Showdown | GameState::Finished) {
-                    p.hand.clone()
-                } else {
-                    vec![]
-                }
+                "hand": p.hand // Sempre mostrar as cartas dos jogadores
             })).collect::<Vec<_>>()
         })
+    }
+
+    pub fn next_hand(&mut self) {
+        // Avançar o dealer para o próximo jogador
+        self.dealer_index = (self.dealer_index + 1) % self.players.len();
+        
+        // Começar nova rodada
+        self.start_round();
+    }
+
+    pub fn get_hand_result(&self) -> Option<serde_json::Value> {
+        if !matches!(self.state, GameState::Finished) {
+            return None;
+        }
+
+        let active_players: Vec<_> = self.players.iter()
+            .enumerate()
+            .filter(|(_, p)| !p.is_folded)
+            .collect();
+
+        if active_players.len() <= 1 {
+            let winner = &active_players[0].1;
+            return Some(serde_json::json!({
+                "type": "single_winner",
+                "winner": {
+                    "id": winner.id,
+                    "name": winner.name,
+                    "hand": winner.hand
+                },
+                "pot_won": 0 // Pot já foi distribuído
+            }));
+        }
+
+        // Avaliar todas as mãos para mostrar o resultado
+        let mut evaluations: Vec<(usize, HandEvaluation)> = Vec::new();
+        
+        for (index, player) in &active_players {
+            let mut all_cards = player.hand.clone();
+            all_cards.extend(self.community_cards.clone());
+            let evaluation = self.evaluate_hand(all_cards);
+            evaluations.push((*index, evaluation));
+        }
+
+        // Ordenar por força da mão
+        evaluations.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Determinar vencedores
+        let best_hand = &evaluations[0].1;
+        let mut winners = Vec::new();
+        
+        for (index, eval) in &evaluations {
+            if eval == best_hand {
+                winners.push((*index, eval.clone()));
+            } else {
+                break;
+            }
+        }
+
+        Some(serde_json::json!({
+            "type": "showdown",
+            "winners": winners.iter().map(|(index, eval)| {
+                let player = &self.players[*index];
+                serde_json::json!({
+                    "id": player.id,
+                    "name": player.name,
+                    "hand": player.hand,
+                    "best_hand": eval.cards,
+                    "hand_rank": eval.rank
+                })
+            }).collect::<Vec<_>>(),
+            "all_hands": evaluations.iter().map(|(index, eval)| {
+                let player = &self.players[*index];
+                serde_json::json!({
+                    "id": player.id,
+                    "name": player.name,
+                    "hand": player.hand,
+                    "best_hand": eval.cards,
+                    "hand_rank": eval.rank
+                })
+            }).collect::<Vec<_>>()
+        }))
     }
 }
 
@@ -471,11 +803,12 @@ mod tests {
         } else {
             PlayerAction::Check
         };
-        
-        let result = game.process_action(&current_player_id, action);
+          let result = game.process_action(&current_player_id, action);
         
         // Deve ser aceito
         assert!(result.is_ok());
+        // Verificar que não retornou resultado de fim de jogo ainda
+        assert!(result.unwrap().is_none());
     }
 
     #[test]
@@ -557,8 +890,7 @@ mod tests {
             
             println!("Player {} ({}) making action: {:?}", 
                      i, current_player_id, action);
-            
-            let result = game.process_action(&current_player_id, action);
+              let result = game.process_action(&current_player_id, action);
             assert!(result.is_ok(), "Action failed for player {}: {:?}", current_player_id, result);
         }
         
@@ -594,8 +926,7 @@ mod tests {
         } else {
             PlayerAction::Check
         };
-        
-        let valid_result = game.process_action(&current_player_id, action);
+          let valid_result = game.process_action(&current_player_id, action);
         assert!(valid_result.is_ok());
         
         // Verificar que apenas a ação válida teve efeito
@@ -634,8 +965,7 @@ mod tests {
         } else {
             PlayerAction::Check
         };
-        
-        let valid_result = game.process_action(&current_player_id, action);
+          let valid_result = game.process_action(&current_player_id, action);
         assert!(valid_result.is_ok());
         
         // Após uma ação válida, o jogador atual deve ter mudado
@@ -761,5 +1091,276 @@ mod tests {
         
         // Após UMA ação válida, ainda deve estar no PreFlop
         assert_eq!(game.state, GameState::PreFlop, "Should still be in PreFlop after only one valid action");
+    }
+
+    #[test]
+    fn test_hand_evaluation_royal_flush() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Hearts, rank: Rank::King },
+            Card { suit: Suit::Hearts, rank: Rank::Queen },
+            Card { suit: Suit::Hearts, rank: Rank::Jack },
+            Card { suit: Suit::Hearts, rank: Rank::Ten },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::RoyalFlush);
+    }
+
+    #[test]
+    fn test_hand_evaluation_straight_flush() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Nine },
+            Card { suit: Suit::Hearts, rank: Rank::Eight },
+            Card { suit: Suit::Hearts, rank: Rank::Seven },
+            Card { suit: Suit::Hearts, rank: Rank::Six },
+            Card { suit: Suit::Hearts, rank: Rank::Five },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::StraightFlush);
+    }
+
+    #[test]
+    fn test_hand_evaluation_four_of_a_kind() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Ace },
+            Card { suit: Suit::Clubs, rank: Rank::Ace },
+            Card { suit: Suit::Spades, rank: Rank::Ace },
+            Card { suit: Suit::Hearts, rank: Rank::King },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::FourOfAKind);
+    }
+
+    #[test]
+    fn test_hand_evaluation_full_house() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Ace },
+            Card { suit: Suit::Clubs, rank: Rank::Ace },
+            Card { suit: Suit::Spades, rank: Rank::King },
+            Card { suit: Suit::Hearts, rank: Rank::King },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::FullHouse);
+    }
+
+    #[test]
+    fn test_hand_evaluation_flush() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Hearts, rank: Rank::King },
+            Card { suit: Suit::Hearts, rank: Rank::Nine },
+            Card { suit: Suit::Hearts, rank: Rank::Seven },
+            Card { suit: Suit::Hearts, rank: Rank::Five },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::Flush);
+    }
+
+    #[test]
+    fn test_hand_evaluation_straight() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::King },
+            Card { suit: Suit::Clubs, rank: Rank::Queen },
+            Card { suit: Suit::Spades, rank: Rank::Jack },
+            Card { suit: Suit::Hearts, rank: Rank::Ten },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::Straight);
+    }
+
+    #[test]
+    fn test_hand_evaluation_wheel_straight() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+            Card { suit: Suit::Spades, rank: Rank::Four },
+            Card { suit: Suit::Hearts, rank: Rank::Five },
+            Card { suit: Suit::Spades, rank: Rank::King },
+            Card { suit: Suit::Clubs, rank: Rank::Queen },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::Straight);
+    }
+
+    #[test]
+    fn test_hand_evaluation_three_of_a_kind() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Ace },
+            Card { suit: Suit::Clubs, rank: Rank::Ace },
+            Card { suit: Suit::Spades, rank: Rank::King },
+            Card { suit: Suit::Hearts, rank: Rank::Queen },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::ThreeOfAKind);
+    }
+
+    #[test]
+    fn test_hand_evaluation_two_pair() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Ace },
+            Card { suit: Suit::Clubs, rank: Rank::King },
+            Card { suit: Suit::Spades, rank: Rank::King },
+            Card { suit: Suit::Hearts, rank: Rank::Queen },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::TwoPair);
+    }
+
+    #[test]
+    fn test_hand_evaluation_one_pair() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::Ace },
+            Card { suit: Suit::Clubs, rank: Rank::King },
+            Card { suit: Suit::Spades, rank: Rank::Queen },
+            Card { suit: Suit::Hearts, rank: Rank::Jack },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::OnePair);
+    }
+
+    #[test]
+    fn test_hand_evaluation_high_card() {
+        let players = create_test_players();
+        let game = Game::new(players);
+        
+        let cards = vec![
+            Card { suit: Suit::Hearts, rank: Rank::Ace },
+            Card { suit: Suit::Diamonds, rank: Rank::King },
+            Card { suit: Suit::Clubs, rank: Rank::Jack },
+            Card { suit: Suit::Spades, rank: Rank::Nine },
+            Card { suit: Suit::Hearts, rank: Rank::Seven },
+            Card { suit: Suit::Spades, rank: Rank::Two },
+            Card { suit: Suit::Clubs, rank: Rank::Three },
+        ];
+        
+        let evaluation = game.evaluate_hand(cards);
+        assert_eq!(evaluation.rank, HandRank::HighCard);
+    }
+
+    #[test]
+    fn test_complete_game_with_winner_determination() {
+        let players = create_test_players();
+        let mut game = Game::new(players);
+        
+        // Começar a rodada
+        game.start_round();
+        
+        // Verificar que os jogadores receberam cartas
+        for player in &game.players {
+            assert_eq!(player.hand.len(), 2);
+        }
+        
+        // Simular que todos os jogadores fazem call/check para avançar para o flop
+        let num_players = game.players.len();
+        for _ in 0..num_players {
+            let current_player_id = game.players[game.current_player_index].id.clone();
+            let action = if game.current_bet > game.players[game.current_player_index].current_bet {
+                PlayerAction::Call
+            } else {
+                PlayerAction::Check
+            };
+            let _ = game.process_action(&current_player_id, action);
+        }
+        
+        // Deve estar no flop agora
+        assert_eq!(game.state, GameState::Flop);
+        assert_eq!(game.community_cards.len(), 3);
+        
+        // Continuar até o river
+        for _ in 0..num_players {
+            let current_player_id = game.players[game.current_player_index].id.clone();
+            let _ = game.process_action(&current_player_id, PlayerAction::Check);
+        }
+        
+        assert_eq!(game.state, GameState::Turn);
+        assert_eq!(game.community_cards.len(), 4);
+        
+        for _ in 0..num_players {
+            let current_player_id = game.players[game.current_player_index].id.clone();
+            let _ = game.process_action(&current_player_id, PlayerAction::Check);
+        }
+        
+        assert_eq!(game.state, GameState::River);
+        assert_eq!(game.community_cards.len(), 5);
+        
+        for _ in 0..num_players {
+            let current_player_id = game.players[game.current_player_index].id.clone();
+            let _ = game.process_action(&current_player_id, PlayerAction::Check);
+        }
+        
+        // Deve ter terminado
+        assert_eq!(game.state, GameState::Finished);
+        
+        // Verificar que um vencedor foi determinado (pot foi distribuído)
+        assert_eq!(game.pot, 0);
+        
+        // Verificar que pelo menos um jogador ganhou fichas
+        let total_chips: u32 = game.players.iter().map(|p| p.chips).sum();
+        assert!(total_chips > 0);
     }
 }

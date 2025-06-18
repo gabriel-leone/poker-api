@@ -30,6 +30,8 @@ async fn main() {
         .route("/room/:room_id/join", post(handlers::join_room))
         .route("/room/:room_id/ws", get(websocket::websocket_handler))
         .route("/room/:room_id/start", post(handlers::start_game))
+        .route("/room/:room_id/result", get(handlers::get_hand_result))
+        .route("/room/:room_id/next", post(handlers::next_hand))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
