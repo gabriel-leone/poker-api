@@ -8,6 +8,14 @@ use uuid::Uuid;
 
 use crate::{models::*, AppState};
 
+pub async fn health_check() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "healthy",
+        "service": "poker-api",
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
 pub async fn create_room(
     State(state): State<AppState>,
     Json(request): Json<CreateRoomRequest>,

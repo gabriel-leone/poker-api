@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: poker-api
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        sync: false
+      - key: RUST_LOG
+        value: info
+      - key: RUST_BACKTRACE
+        value: "1"
+    disk:
+      name: poker-api-disk
+      mountPath: /app/data
+      sizeGB: 1

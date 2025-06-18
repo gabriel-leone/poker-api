@@ -3,6 +3,9 @@ mod game;
 mod handlers;
 mod websocket;
 
+#[cfg(test)]
+mod integration_tests;
+
 use axum::{
     routing::{get, post},
     Router,
@@ -26,6 +29,7 @@ async fn main() {
     };
 
     let app = Router::new()
+        .route("/health", get(handlers::health_check))
         .route("/room", post(handlers::create_room))
         .route("/room/:room_id/join", post(handlers::join_room))
         .route("/room/:room_id/ws", get(websocket::websocket_handler))
@@ -35,8 +39,12 @@ async fn main() {
         .with_state(state)
         .layer(CorsLayer::permissive());
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Servidor rodando em http://0.0.0.0:3000");
+    // Configura a porta via variável de ambiente (necessário para o Render)
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let addr = format!("0.0.0.0:{}", port);
+    
+    let listener = TcpListener::bind(&addr).await.unwrap();
+    println!("Servidor rodando em http://{}", addr);
     
     axum::serve(listener, app).await.unwrap();
 }
