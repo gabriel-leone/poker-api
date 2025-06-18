@@ -1,6 +1,6 @@
-mod models;
 mod game;
 mod handlers;
+mod models;
 mod websocket;
 
 #[cfg(test)]
@@ -12,8 +12,8 @@ use axum::{
 };
 use dashmap::DashMap;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 
 use crate::models::*;
 
@@ -42,9 +42,9 @@ async fn main() {
     // Configura a porta via variável de ambiente (necessário para o Render)
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
-    
+
     let listener = TcpListener::bind(&addr).await.unwrap();
     println!("Servidor rodando em http://{}", addr);
-    
+
     axum::serve(listener, app).await.unwrap();
 }

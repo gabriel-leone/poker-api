@@ -7,11 +7,11 @@ mod integration_tests {
         routing::{get, post},
         Router,
     };
+    use dashmap::DashMap;
+    use serde_json::json;
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tower_http::cors::CorsLayer;
-    use serde_json::json;
-    use dashmap::DashMap;
-    use std::sync::Arc;
 
     async fn create_test_app() -> Router {
         let state = AppState {
@@ -31,7 +31,12 @@ mod integration_tests {
         let app = create_test_app().await;
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

@@ -35,7 +35,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, state: AppState) {
     let room_id_clone = room_id.clone();
     let state_clone = state.clone();
     let tx_clone = tx.clone();
-    
+
     let recv_task = tokio::spawn(async move {
         let mut player_id: Option<String> = None;
 
@@ -45,14 +45,21 @@ async fn handle_socket(socket: WebSocket, room_id: String, state: AppState) {
                     if let Ok(ws_message) = serde_json::from_str::<WebSocketMessage>(&text) {
                         match ws_message.message_type.as_str() {
                             "join" => {
-                                if let Ok(join_data) = serde_json::from_value::<serde_json::Value>(ws_message.data) {
-                                    if let Some(pid) = join_data.get("player_id").and_then(|v| v.as_str()) {
+                                if let Ok(join_data) =
+                                    serde_json::from_value::<serde_json::Value>(ws_message.data)
+                                {
+                                    if let Some(pid) =
+                                        join_data.get("player_id").and_then(|v| v.as_str())
+                                    {
                                         player_id = Some(pid.to_string());
-                                        
+
                                         // Adicionar sender do WebSocket à sala
-                                        if let Some(mut room) = state_clone.rooms.get_mut(&room_id_clone) {
-                                            room.websocket_senders.insert(pid.to_string(), tx_clone.clone());
-                                            
+                                        if let Some(mut room) =
+                                            state_clone.rooms.get_mut(&room_id_clone)
+                                        {
+                                            room.websocket_senders
+                                                .insert(pid.to_string(), tx_clone.clone());
+
                                             // Enviar estado atual da sala
                                             let room_state = serde_json::json!({
                                                 "type": "room_state",
@@ -62,7 +69,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, state: AppState) {
                                                     "game": room.game.as_ref().map(|g| g.get_game_state())
                                                 }
                                             });
-                                            
+
                                             let _ = tx_clone.send(room_state.to_string());
                                         }
                                     }
@@ -70,8 +77,16 @@ async fn handle_socket(socket: WebSocket, room_id: String, state: AppState) {
                             }
                             "game_action" => {
                                 if let Some(ref pid) = player_id {
-                                    if let Ok(action_data) = serde_json::from_value::<GameActionMessage>(ws_message.data) {
-                                        handle_game_action(&state_clone, &room_id_clone, pid, action_data.action).await;
+                                    if let Ok(action_data) =
+                                        serde_json::from_value::<GameActionMessage>(ws_message.data)
+                                    {
+                                        handle_game_action(
+                                            &state_clone,
+                                            &room_id_clone,
+                                            pid,
+                                            action_data.action,
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -109,7 +124,7 @@ async fn handle_game_action(
         // Primeiro, coletar todos os senders
         let senders: Vec<_> = room.websocket_senders.values().cloned().collect();
         let player_sender = room.websocket_senders.get(player_id).cloned();
-          if let Some(ref mut game) = room.game {
+        if let Some(ref mut game) = room.game {
             match game.process_action(player_id, action) {
                 Ok(round_result) => {
                     // Enviar estado atualizado do jogo para todos os jogadores
@@ -136,11 +151,10 @@ async fn handle_game_action(
 
                         // Aguardar 5 segundos e iniciar nova rodada
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                        
+
                         // Verificar se ainda há jogadores suficientes
-                        let active_players_count = game.players.iter()
-                            .filter(|p| p.chips > 0)
-                            .count();
+                        let active_players_count =
+                            game.players.iter().filter(|p| p.chips > 0).count();
 
                         if active_players_count >= 2 {
                             game.dealer_index = (game.dealer_index + 1) % game.players.len();
