@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod integration_tests {
+mod tests {
     use crate::{handlers, AppState};
     use axum::{
         body::Body,

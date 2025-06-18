@@ -667,7 +667,7 @@ impl Game {
             "state": self.state,
             "pot": self.pot,
             "current_bet": self.current_bet,
-            "current_player": if self.players.len() > 0 {
+            "current_player": if !self.players.is_empty() {
                 Some(&self.players[self.current_player_index].id)
             } else {
                 None
@@ -997,8 +997,8 @@ mod tests {
         let invalid_result = game.process_action(wrong_player_id, PlayerAction::Check);
         assert!(invalid_result.is_err());
 
-        let state_after_invalid = game.state.clone();
-        let cards_after_invalid = game.community_cards.len();
+        let _state_after_invalid = game.state.clone();
+        let _cards_after_invalid = game.community_cards.len();
         let player_after_invalid = game.current_player_index;
 
         // Fazer uma ação válida
