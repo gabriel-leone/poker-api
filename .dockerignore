@@ -15,7 +15,6 @@ target/
 
 # Rust
 **/*.rs.bk
-Cargo.lock
 
 # IDE
 .vscode/
